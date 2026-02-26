@@ -1,0 +1,10 @@
+{
+  "name": "painel-loja",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "sqlite3": "^5.1.6"
+  }
+}
