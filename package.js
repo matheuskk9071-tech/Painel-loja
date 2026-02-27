@@ -12,6 +12,5 @@
   },
   "dependencies": {
     "discord.js": "^14.16.0",
-    "sqlite3": "^5.1.7"
   }
 }
