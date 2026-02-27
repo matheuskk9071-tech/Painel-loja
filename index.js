@@ -317,4 +317,186 @@ client.on("interactionCreate", async (interaction) => {
 
     // Modal submit: abrir ticket
     if (interaction.isModalSubmit() && interaction.customId.startsWith("modal_open_")) {
-      const category
+      const categoryId = interaction.customId.replace("modal_open_", "");
+      const category = TICKET_CONFIG.categories.find((c) => c.id === categoryId);
+      if (!category) return interaction.reply({ content: "Categoria inválida.", ephemeral: true });
+
+      // coletar respostas
+      const answers = [];
+      const fields = category.form?.fields || [];
+      for (const f of fields.slice(0, 5)) {
+        const value = interaction.fields.getTextInputValue(f.id);
+        answers.push({ label: f.label, value });
+      }
+
+      // criar canal
+      const prefix = category.channelPrefix || "ticket";
+      const channelName = safeChannelName(`${prefix}-${interaction.user.username}`);
+
+      const overwrites = [
+        {
+          id: interaction.guild.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: interaction.user.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.AttachFiles,
+            PermissionFlagsBits.EmbedLinks,
+          ],
+        },
+      ];
+
+      const staffRoles = category.staffRoleIds || [];
+      for (const roleId of staffRoles) {
+        overwrites.push({
+          id: roleId,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.ManageMessages,
+          ],
+        });
+      }
+
+      // também permite admin se setou ADMIN_ID
+      if (ADMIN_ID) {
+        overwrites.push({
+          id: ADMIN_ID,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageMessages,
+          ],
+        });
+      }
+
+      const ticketChannel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        parent: TICKET_CATEGORY_ID || null,
+        topic: `ticket:${interaction.user.id}:${categoryId}`,
+        permissionOverwrites: overwrites,
+      });
+
+      const ticketEmbed = buildTicketEmbed({
+        user: interaction.user,
+        category,
+        answers,
+      });
+
+      await ticketChannel.send({
+        content: `👋 ${interaction.user} | ${staffRoles.length ? staffRoles.map((r) => `<@&${r}>`).join(" ") : ""}`,
+        embeds: [ticketEmbed],
+        components: [buildTicketButtons()],
+      });
+
+      return interaction.reply({
+        content: `Ticket criado ✅ ${ticketChannel}`,
+        ephemeral: true,
+      });
+    }
+
+    // Botões dentro do ticket
+    if (interaction.isButton()) {
+      // enviar comprovante
+      if (interaction.customId === "ticket_send_proof") {
+        return interaction.showModal(buildProofModal());
+      }
+
+      // fechar
+      if (interaction.customId === "ticket_close") {
+        // só staff/admin/autor pode fechar
+        const topic = interaction.channel.topic || "";
+        const isOwner = topic.startsWith(`ticket:${interaction.user.id}:`);
+        const isStaff =
+          (STAFF_ROLE_ID && interaction.member?.roles?.cache?.has(STAFF_ROLE_ID)) ||
+          interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ||
+          isAdmin(interaction.user.id);
+
+        if (!isOwner && !isStaff) {
+          return interaction.reply({ content: "Sem permissão pra fechar.", ephemeral: true });
+        }
+
+        await interaction.channel.permissionOverwrites.edit(interaction.guild.id, {
+          ViewChannel: false,
+        });
+
+        // remove permissão do autor (fecha pro cliente)
+        const ownerId = (topic.match(/^ticket:(\d+):/) || [])[1];
+        if (ownerId) {
+          await interaction.channel.permissionOverwrites.edit(ownerId, {
+            ViewChannel: false,
+          });
+        }
+
+        await interaction.reply({ content: "Ticket fechado 🔒", ephemeral: true });
+        return interaction.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xffcc00)
+              .setTitle("🔒 Ticket fechado")
+              .setDescription("Se precisar reabrir, clique no botão abaixo.")
+              .setTimestamp(),
+          ],
+          components: [buildReopenButton()],
+        });
+      }
+
+      // reabrir
+      if (interaction.customId === "ticket_reopen") {
+        const topic = interaction.channel.topic || "";
+        const ownerId = (topic.match(/^ticket:(\d+):/) || [])[1];
+
+        const isStaff =
+          (STAFF_ROLE_ID && interaction.member?.roles?.cache?.has(STAFF_ROLE_ID)) ||
+          interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ||
+          isAdmin(interaction.user.id);
+
+        if (!isStaff) return interaction.reply({ content: "Só a equipe pode reabrir.", ephemeral: true });
+
+        if (ownerId) {
+          await interaction.channel.permissionOverwrites.edit(ownerId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true,
+            AttachFiles: true,
+            EmbedLinks: true,
+          });
+        }
+
+        return interaction.reply({ content: "Ticket reaberto 🔓", ephemeral: true });
+      }
+    }
+
+    // Modal comprovante
+    if (interaction.isModalSubmit() && interaction.customId === "modal_proof") {
+      const proof = interaction.fields.getTextInputValue("proof_link");
+
+      const embed = new EmbedBuilder()
+        .setColor(0x00d166)
+        .setTitle("📎 Comprovante enviado")
+        .setDescription(proof.slice(0, 4000))
+        .setFooter({ text: `Enviado por ${interaction.user.tag}` })
+        .setTimestamp();
+
+      await interaction.reply({ content: "Comprovante enviado ✅", ephemeral: true });
+      return interaction.channel.send({ embeds: [embed] });
+    }
+  } catch (e) {
+    console.error(e);
+    if (!interaction.replied) {
+      try {
+        await interaction.reply({ content: "Deu erro. Veja os logs do Railway.", ephemeral: true });
+      } catch {}
+    }
+  }
+});
+
+client.login(TOKEN);
