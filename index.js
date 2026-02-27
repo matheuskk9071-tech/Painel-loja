@@ -4,30 +4,44 @@ const {
   SlashCommandBuilder,
   REST,
   Routes,
+
+  // Permissões / Canais
+  PermissionFlagsBits,
+  ChannelType,
+
+  // UI
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,
+  EmbedBuilder,
+
+  // Modal
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  EmbedBuilder,
-  PermissionFlagsBits,
-  ChannelType
 } = require("discord.js");
 
 const sqlite3 = require("sqlite3").verbose();
 
+// ================== ENV ==================
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const ADMIN_ID = process.env.ADMIN_ID;
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
+// Ticket (opcional)
+const 1476627555095412856 = process.env.TICKET_CATEGORY_ID; // categoria tickets
+const 1467638539800940637 = process.env.STAFF_ROLE_ID; // cargo staff
 
+// ================== CLIENT ==================
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+// ================== DB PRODUTOS ==================
 const db = new sqlite3.Database("./produtos.db");
 
+// Obs: se você já tinha DB antiga sem coluna imagem/cargo_id, pode precisar recriar a DB.
+// (ou deixar como está se já funcionava)
 db.run(`
 CREATE TABLE IF NOT EXISTS produtos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,213 +49,12 @@ CREATE TABLE IF NOT EXISTS produtos (
   preco TEXT,
   estoque INTEGER,
   descricao TEXT,
-  imagem TEXT
+  imagem TEXT,
+  cargo_id TEXT
 )
 `);
 
-client.once("ready", async () => {
-  console.log("Bot online!");
-
-  const commands = [
-    new SlashCommandBuilder()
-      .setName("criar-produto")
-      .setDescription("Criar e postar produto automaticamente")
-  ].map(c => c.toJSON());
-
-  const rest = new REST({ version: "10" }).setToken(TOKEN);
-
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
-  );
-});
-
-client.on("interactionCreate", async interaction => {
-
-  if (interaction.isChatInputCommand()) {
-
-    if (interaction.commandName === "criar-produto") {
-
-      if (interaction.user.id !== ADMIN_ID)
-        return interaction.reply({ content: "Sem permissão.", ephemeral: true });
-
-      const modal = new ModalBuilder()
-        .setCustomId("modal_criar")
-        .setTitle("Criar Produto");
-
-      const nome = new TextInputBuilder()
-        .setCustomId("nome")
-        .setLabel("Nome do produto")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const preco = new TextInputBuilder()
-        .setCustomId("preco")
-        .setLabel("Preço")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const estoque = new TextInputBuilder()
-        .setCustomId("estoque")
-        .setLabel("Estoque")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const descricao = new TextInputBuilder()
-        .setCustomId("descricao")
-        .setLabel("Descrição")
-        .setStyle(TextInputStyle.Paragraph);
-
-      const imagem = new TextInputBuilder()
-        .setCustomId("imagem")
-        .setLabel("URL da imagem (opcional)")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(nome),
-        new ActionRowBuilder().addComponents(preco),
-        new ActionRowBuilder().addComponents(estoque),
-        new ActionRowBuilder().addComponents(descricao),
-        new ActionRowBuilder().addComponents(imagem)
-      );
-
-      return interaction.showModal(modal);
-    }
-  }
-
-  if (interaction.isModalSubmit()) {
-
-    if (interaction.customId === "modal_criar") {
-
-      const nome = interaction.fields.getTextInputValue("nome");
-      const preco = interaction.fields.getTextInputValue("preco");
-      const estoque = interaction.fields.getTextInputValue("estoque");
-      const descricao = interaction.fields.getTextInputValue("descricao");
-      const imagem = interaction.fields.getTextInputValue("imagem") || null;
-
-      db.run(
-        `INSERT INTO produtos (nome, preco, estoque, descricao, imagem)
-         VALUES (?, ?, ?, ?, ?)`,
-        [nome, preco, estoque, descricao, imagem],
-        async function (err) {
-
-          if (err)
-            return interaction.reply({ content: "Erro ao criar produto.", ephemeral: true });
-
-          const embed = new EmbedBuilder()
-            .setTitle(nome)
-            .setDescription(descricao || "Sem descrição")
-            .addFields(
-              { name: "💰 Preço", value: preco },
-              { name: "📦 Estoque", value: estoque }
-            )
-            .setColor("Green");
-
-          if (imagem) {
-            embed.setImage(imagem);
-          }
-
-          const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`comprar_${this.lastID}`)
-              .setLabel("💰 Comprar")
-              .setStyle(ButtonStyle.Primary)
-          );
-
-          await interaction.channel.send({
-            embeds: [embed],
-            components: [row]
-          });
-
-          interaction.reply({
-            content: "Produto criado e postado no canal!",
-            ephemeral: true
-          });
-        }
-      );
-    }
-  }
-
-  if (interaction.isButton()) {
-
-    if (interaction.customId.startsWith("comprar_")) {
-
-      const produtoId = interaction.customId.split("_")[1];
-
-      db.get("SELECT * FROM produtos WHERE id = ?", [produtoId], async (err, produto) => {
-
-        if (!produto)
-          return interaction.reply({ content: "Produto não encontrado.", ephemeral: true });
-
-        const ticket = await interaction.guild.channels.create({
-          name: `ticket-${interaction.user.username}`,
-          type: ChannelType.GuildText,
-          permissionOverwrites: [
-            {
-              id: interaction.guild.id,
-              deny: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-              id: interaction.user.id,
-              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
-            }
-          ]
-        });
-
-        await ticket.send(`
-🛒 **Compra iniciada**
-
-Produto: ${produto.nome}
-Valor: ${produto.preco}
-
-💰 Chave Pix: 0a234107-6c22-4544-855b-f00e3c3c057f
-
-Envie o comprovante aqui.
-⏳ Prazo de entrega: até 30 minutos após confirmação.
-        `);
-
-        interaction.reply({
-          content: "Ticket criado!",
-          ephemeral: true
-        });
-      });
-    }
-  }
-
-});
-
-client.login(TOKEN);
-
-const {
-  Client,
-  GatewayIntentBits,
-  SlashCommandBuilder,
-  REST,
-  Routes,
-  PermissionFlagsBits,
-  ChannelType,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  StringSelectMenuBuilder,
-  EmbedBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-} = require("discord.js");
-
-// ================== ENV ==================
-const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
-
-// Opcional, mas recomendado:
-const ADMIN_ID = process.env.ADMIN_ID; // seu id
-const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID; // id da categoria onde os tickets serão criados (opcional)
-const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID; // cargo staff (opcional, mas recomendado)
-
-// ================== CONFIG (EDITA AQUI) ==================
+// ================== TICKET CONFIG (EDITA AQUI) ==================
 const TICKET_CONFIG = {
   panel: {
     title: "🎫 Central de Atendimento",
@@ -253,12 +66,16 @@ const TICKET_CONFIG = {
       "**Regras rápidas:**\n" +
       "• Não marque @everyone\n" +
       "• Envie detalhes completos\n" +
-      "• Comprovante somente no botão (se necessário)",
+      "• Comprovante somente no botão 📎",
     color: 0x2b2d31,
     footer: "Sistema de Tickets • Premium",
   },
 
-  // CATEGORIAS (100% configurável)
+  pix: {
+    chave: "SUA_CHAVE_PIX_AQUI", // <<<<< TROCA AQUI
+    prazo: "até 30 minutos após confirmação",
+  },
+
   categories: [
     {
       id: "compra",
@@ -266,13 +83,13 @@ const TICKET_CONFIG = {
       description: "Comprar, pagar, enviar comprovante, prazo.",
       emoji: "🛒",
       channelPrefix: "compra",
-      staffRoleIds: (STAFF_ROLE_ID ? [STAFF_ROLE_ID] : []),
+      staffRoleIds: STAFF_ROLE_ID ? [STAFF_ROLE_ID] : [],
       form: {
         title: "Compra / Pagamento",
         fields: [
-          { id: "produto", label: "O que você quer comprar?", style: "short", required: true, placeholder: "Ex: Dark Blade / 2x Money / Conta" },
+          { id: "produto", label: "Produto", style: "short", required: true, placeholder: "Ex: Dark Blade / Conta / Gamepass" },
           { id: "valor", label: "Valor (R$)", style: "short", required: true, placeholder: "Ex: 49,90" },
-          { id: "detalhes", label: "Detalhes / Observações", style: "paragraph", required: false, placeholder: "Ex: Urgente / horário / etc" },
+          { id: "detalhes", label: "Detalhes / Observações", style: "paragraph", required: false, placeholder: "Ex: urgência, horário, etc." },
         ],
       },
     },
@@ -282,46 +99,17 @@ const TICKET_CONFIG = {
       description: "Problemas, dúvidas, ajuda geral.",
       emoji: "🛠️",
       channelPrefix: "suporte",
-      staffRoleIds: (STAFF_ROLE_ID ? [STAFF_ROLE_ID] : []),
+      staffRoleIds: 1467638539800940637 ? [STAFF_ROLE_ID] : [],
       form: {
         title: "Suporte",
         fields: [
-          { id: "assunto", label: "Assunto", style: "short", required: true, placeholder: "Ex: Não recebi / erro / dúvida" },
-          { id: "descricao", label: "Descreva o problema", style: "paragraph", required: true, placeholder: "Explique com detalhes pra agilizar" },
-        ],
-      },
-    },
-    {
-      id: "parceria",
-      label: "🤝 Parceria",
-      description: "Divulgação, parceria, collab.",
-      emoji: "🤝",
-      channelPrefix: "parceria",
-      staffRoleIds: (STAFF_ROLE_ID ? [STAFF_ROLE_ID] : []),
-      form: {
-        title: "Parceria",
-        fields: [
-          { id: "rede", label: "Sua rede / canal", style: "short", required: true, placeholder: "Link do seu Discord / YouTube / TikTok" },
-          { id: "proposta", label: "Proposta", style: "paragraph", required: true, placeholder: "Explique a parceria" },
+          { id: "assunto", label: "Assunto", style: "short", required: true, placeholder: "Ex: dúvida / erro / pedido" },
+          { id: "descricao", label: "Descrição", style: "paragraph", required: true, placeholder: "Explique com detalhes" },
         ],
       },
     },
   ],
-
-  ticketMessage: {
-    color: 0x00d166,
-    paymentText:
-      "**Pagamento (Pix):**\n" +
-      "• Chave Pix: `SUA_CHAVE_PIX_AQUI`\n" +
-      "• Após pagar, clique em **📎 Enviar comprovante**\n\n" +
-      "**Prazo:** até X minutos após confirmação.",
-  },
 };
-
-// ================== CLIENT ==================
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
-});
 
 // ================== HELPERS ==================
 function isAdmin(userId) {
@@ -338,7 +126,6 @@ function safeChannelName(str) {
 }
 
 async function findExistingTicket(guild, userId, categoryId) {
-  // procura canal com topic ticket:userId:categoryId
   const topic = `ticket:${userId}:${categoryId}`;
   const channels = await guild.channels.fetch();
   return channels.find((c) => c && c.topic === topic);
@@ -356,7 +143,7 @@ function buildSelectMenu() {
   const options = TICKET_CONFIG.categories.map((c) => ({
     label: c.label,
     value: c.id,
-    description: c.description?.slice(0, 100) || "Abrir ticket",
+    description: (c.description || "Abrir ticket").slice(0, 100),
     emoji: c.emoji || undefined,
   }));
 
@@ -366,29 +153,27 @@ function buildSelectMenu() {
     .addOptions(options);
 }
 
-function buildTicketEmbed({ user, category, answers }) {
-  const embed = new EmbedBuilder()
-    .setTitle(`🎟️ Ticket aberto • ${category.label}`)
-    .setColor(TICKET_CONFIG.ticketMessage.color)
-    .setDescription(
-      `Olá ${user}, seu ticket foi criado com sucesso.\n\n` +
-      "**Informações enviadas:**"
-    )
-    .setFooter({ text: "Mantenha tudo organizado para agilizar." })
-    .setTimestamp();
+function buildCategoryModal(category) {
+  const modal = new ModalBuilder()
+    .setCustomId(`modal_open_${category.id}`)
+    .setTitle(category.form?.title || "Abrir Ticket");
 
-  // answers array: [{label, value}]
-  for (const a of answers) {
-    const v = (a.value || "").toString().trim();
-    if (v.length > 0) embed.addFields({ name: a.label, value: v.slice(0, 1024) });
+  const rows = [];
+  const fields = category.form?.fields || [];
+
+  for (const f of fields.slice(0, 5)) {
+    const input = new TextInputBuilder()
+      .setCustomId(f.id)
+      .setLabel(f.label)
+      .setRequired(!!f.required)
+      .setPlaceholder(f.placeholder || "")
+      .setStyle(f.style === "paragraph" ? TextInputStyle.Paragraph : TextInputStyle.Short);
+
+    rows.push(new ActionRowBuilder().addComponents(input));
   }
 
-  // bloco pagamento (só se categoria compra)
-  if (category.id === "compra") {
-    embed.addFields({ name: "💳 Pagamento", value: TICKET_CONFIG.ticketMessage.paymentText });
-  }
-
-  return embed;
+  modal.addComponents(...rows);
+  return modal;
 }
 
 function buildTicketButtons() {
@@ -413,7 +198,6 @@ function buildReopenButton() {
   );
 }
 
-// Modal de comprovante
 function buildProofModal() {
   const modal = new ModalBuilder()
     .setCustomId("modal_proof")
@@ -421,51 +205,60 @@ function buildProofModal() {
 
   const link = new TextInputBuilder()
     .setCustomId("proof_link")
-    .setLabel("Link/Texto do comprovante (ou descreva)")
+    .setLabel("Link/Texto do comprovante")
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(true)
-    .setPlaceholder("Ex: link de imagem / código / descrição do pagamento");
+    .setPlaceholder("Ex: link da imagem / descrição do pagamento");
 
   modal.addComponents(new ActionRowBuilder().addComponents(link));
   return modal;
 }
 
-// Modal da categoria (campos)
-function buildCategoryModal(category) {
-  const modal = new ModalBuilder()
-    .setCustomId(`modal_open_${category.id}`)
-    .setTitle(category.form?.title || "Abrir Ticket");
+function buildTicketEmbed({ user, category, answers }) {
+  const embed = new EmbedBuilder()
+    .setTitle(`🎟️ Ticket aberto • ${category.label}`)
+    .setColor(0x00d166)
+    .setDescription(`Olá ${user}, seu ticket foi criado com sucesso.\n\n**Informações enviadas:**`)
+    .setFooter({ text: "Mantenha tudo organizado para agilizar." })
+    .setTimestamp();
 
-  const rows = [];
-  const fields = category.form?.fields || [];
-  for (const f of fields.slice(0, 5)) {
-    const input = new TextInputBuilder()
-      .setCustomId(f.id)
-      .setLabel(f.label)
-      .setRequired(!!f.required)
-      .setPlaceholder(f.placeholder || "")
-      .setStyle(f.style === "paragraph" ? TextInputStyle.Paragraph : TextInputStyle.Short);
-
-    rows.push(new ActionRowBuilder().addComponents(input));
+  for (const a of answers) {
+    const v = (a.value || "").toString().trim();
+    if (v.length > 0) embed.addFields({ name: a.label, value: v.slice(0, 1024) });
   }
 
-  modal.addComponents(...rows);
-  return modal;
+  if (category.id === "compra") {
+    embed.addFields({
+      name: "💳 Pagamento (Pix)",
+      value:
+        `• Chave Pix: \`${TICKET_CONFIG.pix.chave}\`\n` +
+        `• Após pagar, clique em **📎 Enviar comprovante**\n` +
+        `• Prazo: ${TICKET_CONFIG.pix.prazo}`,
+    });
+  }
+
+  return embed;
 }
 
-// ================== COMMANDS REGISTER ==================
+// ================== REGISTER COMMANDS ==================
 client.once("ready", async () => {
   console.log("Bot online!");
 
   const commands = [
+    // PRODUTOS
+    new SlashCommandBuilder()
+      .setName("painel")
+      .setDescription("Abrir painel da loja (admin)"),
+
+    // TICKET PRO
     new SlashCommandBuilder()
       .setName("ticket-painel")
-      .setDescription("Posta o painel de tickets no canal")
+      .setDescription("Postar painel de tickets no canal (admin)")
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
     new SlashCommandBuilder()
       .setName("ticket-setup")
-      .setDescription("Mostra quais variáveis você precisa configurar")
+      .setDescription("Ver variáveis necessárias do sistema de ticket (admin)")
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   ].map((c) => c.toJSON());
 
@@ -478,58 +271,342 @@ client.once("ready", async () => {
 // ================== INTERACTIONS ==================
 client.on("interactionCreate", async (interaction) => {
   try {
-    // /ticket-setup
-    if (interaction.isChatInputCommand() && interaction.commandName === "ticket-setup") {
-      const embed = new EmbedBuilder()
-        .setTitle("⚙️ Setup do Ticket")
-        .setColor(0x5865f2)
-        .setDescription(
-          "Configure as variáveis no Railway (Variables):\n\n" +
-          "✅ `TOKEN`\n" +
-          "✅ `CLIENT_ID`\n" +
-          "✅ `GUILD_ID`\n\n" +
-          "Recomendado:\n" +
-          "• `ADMIN_ID` (seu ID)\n" +
-          "• `STAFF_ROLE_ID` (cargo da equipe)\n" +
-          "• `TICKET_CATEGORY_ID` (categoria onde criar tickets)\n\n" +
-          "Depois use **/ticket-painel** no canal onde quer postar o painel."
-        );
-      return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
+    // ================== SLASH COMMANDS ==================
+    if (interaction.isChatInputCommand()) {
+      // ---------- PRODUTOS: /painel ----------
+      if (interaction.commandName === "painel") {
+        if (!isAdmin(interaction.user.id))
+          return interaction.reply({ content: "Sem permissão.", ephemeral: true });
 
-    // /ticket-painel
-    if (interaction.isChatInputCommand() && interaction.commandName === "ticket-painel") {
-      if (!isAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-        return interaction.reply({ content: "Sem permissão.", ephemeral: true });
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("prod_criar")
+            .setLabel("➕ Criar produto")
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId("prod_catalogo")
+            .setLabel("📦 Ver catálogo")
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        return interaction.reply({
+          content: "Painel administrativo:",
+          components: [row],
+          ephemeral: true,
+        });
       }
 
-      const panelEmbed = buildPanelEmbed();
-      const row = new ActionRowBuilder().addComponents(buildSelectMenu());
+      // ---------- TICKET: /ticket-setup ----------
+      if (interaction.commandName === "ticket-setup") {
+        const embed = new EmbedBuilder()
+          .setTitle("⚙️ Setup Ticket (Premium)")
+          .setColor(0x5865f2)
+          .setDescription(
+            "Variáveis no Railway (Variables):\n\n" +
+              "✅ `TOKEN`\n✅ `CLIENT_ID`\n✅ `GUILD_ID`\n\n" +
+              "Recomendado:\n" +
+              "• `ADMIN_ID` (seu ID)\n" +
+              "• `STAFF_ROLE_ID` (cargo staff)\n" +
+              "• `TICKET_CATEGORY_ID` (categoria onde criar tickets)\n\n" +
+              "Depois use **/ticket-painel** no canal para postar o painel."
+          );
 
-      await interaction.channel.send({ embeds: [panelEmbed], components: [row] });
-      return interaction.reply({ content: "Painel postado ✅", ephemeral: true });
+        return interaction.reply({ embeds: [embed], ephemeral: true });
+      }
+
+      // ---------- TICKET: /ticket-painel ----------
+      if (interaction.commandName === "ticket-painel") {
+        if (!isAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+          return interaction.reply({ content: "Sem permissão.", ephemeral: true });
+        }
+
+        const panelEmbed = buildPanelEmbed();
+        const row = new ActionRowBuilder().addComponents(buildSelectMenu());
+
+        await interaction.channel.send({ embeds: [panelEmbed], components: [row] });
+        return interaction.reply({ content: "Painel postado ✅", ephemeral: true });
+      }
     }
 
-    // Select: escolher categoria
+    // ================== BUTTONS (PRODUTOS) ==================
+    if (interaction.isButton()) {
+      // ----- Criar produto (abre modal) -----
+      if (interaction.customId === "prod_criar") {
+        if (!isAdmin(interaction.user.id))
+          return interaction.reply({ content: "Sem permissão.", ephemeral: true });
+
+        const modal = new ModalBuilder()
+          .setCustomId("modal_prod_criar")
+          .setTitle("Criar Produto");
+
+        const nome = new TextInputBuilder()
+          .setCustomId("nome")
+          .setLabel("Nome")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        const preco = new TextInputBuilder()
+          .setCustomId("preco")
+          .setLabel("Preço")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        const estoque = new TextInputBuilder()
+          .setCustomId("estoque")
+          .setLabel("Estoque")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        const descricao = new TextInputBuilder()
+          .setCustomId("descricao")
+          .setLabel("Descrição")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false);
+
+        const imagem = new TextInputBuilder()
+          .setCustomId("imagem")
+          .setLabel("URL da imagem (opcional)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false);
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(nome),
+          new ActionRowBuilder().addComponents(preco),
+          new ActionRowBuilder().addComponents(estoque),
+          new ActionRowBuilder().addComponents(descricao),
+          new ActionRowBuilder().addComponents(imagem)
+        );
+
+        return interaction.showModal(modal);
+      }
+
+      // ----- Catálogo -----
+      if (interaction.customId === "prod_catalogo") {
+        db.all("SELECT * FROM produtos", [], (err, rows) => {
+          if (err) return interaction.reply({ content: "Erro no banco.", ephemeral: true });
+
+          if (!rows.length)
+            return interaction.reply({ content: "Sem produtos.", ephemeral: true });
+
+          const embed = new EmbedBuilder()
+            .setTitle("📦 Catálogo")
+            .setColor("Green");
+
+          rows.forEach((p) => {
+            embed.addFields({
+              name: `${p.nome} | ${p.preco}`,
+              value: `Estoque: ${p.estoque}\n${p.descricao || ""}`.slice(0, 1024),
+            });
+          });
+
+          interaction.reply({ embeds: [embed], ephemeral: true });
+        });
+        return;
+      }
+
+      // ================== BUTTONS (TICKET) ==================
+      if (interaction.customId === "ticket_send_proof") {
+        return interaction.showModal(buildProofModal());
+      }
+
+      if (interaction.customId === "ticket_close") {
+        const topic = interaction.channel.topic || "";
+        const ownerId = (topic.match(/^ticket:(\d+):/) || [])[1];
+
+        const isOwner = ownerId && interaction.user.id === ownerId;
+        const isStaff =
+          (STAFF_ROLE_ID && interaction.member?.roles?.cache?.has(STAFF_ROLE_ID)) ||
+          interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ||
+          isAdmin(interaction.user.id);
+
+        if (!isOwner && !isStaff) {
+          return interaction.reply({ content: "Sem permissão pra fechar.", ephemeral: true });
+        }
+
+        if (ownerId) {
+          await interaction.channel.permissionOverwrites.edit(ownerId, { ViewChannel: false });
+        }
+
+        await interaction.reply({ content: "Ticket fechado 🔒", ephemeral: true });
+
+        return interaction.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xffcc00)
+              .setTitle("🔒 Ticket fechado")
+              .setDescription("Se precisar reabrir, clique no botão abaixo.")
+              .setTimestamp(),
+          ],
+          components: [buildReopenButton()],
+        });
+      }
+
+      if (interaction.customId === "ticket_reopen") {
+        const topic = interaction.channel.topic || "";
+        const ownerId = (topic.match(/^ticket:(\d+):/) || [])[1];
+
+        const isStaff =
+          (STAFF_ROLE_ID && interaction.member?.roles?.cache?.has(STAFF_ROLE_ID)) ||
+          interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ||
+          isAdmin(interaction.user.id);
+
+        if (!isStaff) return interaction.reply({ content: "Só a equipe pode reabrir.", ephemeral: true });
+
+        if (ownerId) {
+          await interaction.channel.permissionOverwrites.edit(ownerId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true,
+            AttachFiles: true,
+            EmbedLinks: true,
+          });
+        }
+
+        return interaction.reply({ content: "Ticket reaberto 🔓", ephemeral: true });
+      }
+    }
+
+    // ================== SELECT MENU (TICKET) ==================
     if (interaction.isStringSelectMenu() && interaction.customId === "ticket_select") {
       const categoryId = interaction.values[0];
       const category = TICKET_CONFIG.categories.find((c) => c.id === categoryId);
       if (!category) return interaction.reply({ content: "Categoria inválida.", ephemeral: true });
 
-      // bloquear duplicado
       const existing = await findExistingTicket(interaction.guild, interaction.user.id, categoryId);
       if (existing) {
-        return interaction.reply({
-          content: `Você já tem um ticket aberto: ${existing}`,
-          ephemeral: true,
-        });
+        return interaction.reply({ content: `Você já tem um ticket aberto: ${existing}`, ephemeral: true });
       }
 
-      // abrir modal para pegar infos
-      const modal = buildCategoryModal(category);
-      return interaction.showModal(modal);
+      return interaction.showModal(buildCategoryModal(category));
     }
 
-    // Modal submit: abrir ticket
-    if (interaction.isModalSubmit() && interaction.customId.startsWith("modal_open_")) {
-      const category
+    // ================== MODALS ==================
+    if (interaction.isModalSubmit()) {
+      // ----- Modal criar produto -----
+      if (interaction.customId === "modal_prod_criar") {
+        const nome = interaction.fields.getTextInputValue("nome");
+        const preco = interaction.fields.getTextInputValue("preco");
+        const estoque = interaction.fields.getTextInputValue("estoque");
+        const descricao = interaction.fields.getTextInputValue("descricao");
+        const imagem = interaction.fields.getTextInputValue("imagem") || null;
+
+        db.run(
+          `INSERT INTO produtos (nome, preco, estoque, descricao, imagem)
+           VALUES (?, ?, ?, ?, ?)`,
+          [nome, preco, estoque, descricao, imagem],
+          function (err) {
+            if (err) return interaction.reply({ content: "Erro ao criar produto.", ephemeral: true });
+            return interaction.reply({ content: "✅ Produto criado!", ephemeral: true });
+          }
+        );
+        return;
+      }
+
+      // ----- Modal abrir ticket -----
+      if (interaction.customId.startsWith("modal_open_")) {
+        const categoryId = interaction.customId.replace("modal_open_", "");
+        const category = TICKET_CONFIG.categories.find((c) => c.id === categoryId);
+        if (!category) return interaction.reply({ content: "Categoria inválida.", ephemeral: true });
+
+        const answers = [];
+        const fields = category.form?.fields || [];
+        for (const f of fields.slice(0, 5)) {
+          const value = interaction.fields.getTextInputValue(f.id);
+          answers.push({ label: f.label, value });
+        }
+
+        const prefix = category.channelPrefix || "ticket";
+        const channelName = safeChannelName(`${prefix}-${interaction.user.username}`);
+
+        const overwrites = [
+          {
+            id: interaction.guild.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+            ],
+          },
+        ];
+
+        const staffRoles = category.staffRoleIds || [];
+        for (const roleId of staffRoles) {
+          overwrites.push({
+            id: roleId,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.ManageMessages,
+            ],
+          });
+        }
+
+        if (ADMIN_ID) {
+          overwrites.push({
+            id: 1408237565470838866,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.ManageChannels,
+              PermissionFlagsBits.ManageMessages,
+            ],
+          });
+        }
+
+        const ticketChannel = await interaction.guild.channels.create({
+          name: channelName,
+          type: ChannelType.GuildText,
+          parent: TICKET_CATEGORY_ID || null,
+          topic: `ticket:${interaction.user.id}:${categoryId}`,
+          permissionOverwrites: overwrites,
+        });
+
+        const ticketEmbed = buildTicketEmbed({
+          user: interaction.user,
+          category,
+          answers,
+        });
+
+        await ticketChannel.send({
+          content: `👋 ${interaction.user} ${staffRoles.length ? staffRoles.map((r) => `<@&${r}>`).join(" ") : ""}`,
+          embeds: [ticketEmbed],
+          components: [buildTicketButtons()],
+        });
+
+        return interaction.reply({ content: `Ticket criado ✅ ${ticketChannel}`, ephemeral: true });
+      }
+
+      // ----- Modal comprovante -----
+      if (interaction.customId === "modal_proof") {
+        const proof = interaction.fields.getTextInputValue("proof_link");
+
+        const embed = new EmbedBuilder()
+          .setColor(0x00d166)
+          .setTitle("📎 Comprovante enviado")
+          .setDescription(proof.slice(0, 4000))
+          .setFooter({ text: `Enviado por ${interaction.user.tag}` })
+          .setTimestamp();
+
+        await interaction.reply({ content: "Comprovante enviado ✅", ephemeral: true });
+        return interaction.channel.send({ embeds: [embed] });
+      }
+    }
+  } catch (e) {
+    console.error(e);
+    if (!interaction.replied) {
+      try {
+        await interaction.reply({ content: "Deu erro. Veja os logs do Railway.", ephemeral: true });
+      } catch {}
+    }
+  }
+});
+
+client.login(TOKEN);
